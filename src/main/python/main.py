@@ -1,7 +1,12 @@
 import sys
 
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QWidget, QWidgetAction, QSlider
+from PyQt5.QtWidgets import (
+    QSystemTrayIcon,
+    QMenu,
+    QAction,
+    QWidget,
+)
 from PyQt5.QtCore import Qt
 from fbs_runtime.application_context.PyQt5 import ApplicationContext
 from shutil import copyfile
@@ -40,7 +45,7 @@ class CadmusPulseInterface:
 
         pulse.module_load(
             "module-loopback",
-            "latency_msec=1 source=%s sink=mic_raw_in channels=1" % mic_name,
+            "latency_msec=200 source=%s sink=mic_raw_in channels=1" % mic_name,
         )
 
         pulse.module_load(
@@ -67,7 +72,14 @@ class AudioMenuItem(QAction):
     def __init__(self, text, parent, mic_name):
         super().__init__(text, parent)
         self.mic_name = mic_name
-        self.setStatusTip("Use the %s as an input for noise suppression" % text)
+        self.setStatusTip(
+            "Use the %s as an input for noise suppression" % text)
+
+
+class SuppressionLevelMenuItem(QAction):
+    def __init__(self, suppression_level, parent):
+        super().__init__(f"{suppression_level}", parent)
+        self.suppression_level = suppression_level
 
 
 class CadmusApplication(QSystemTrayIcon):
@@ -77,51 +89,56 @@ class CadmusApplication(QSystemTrayIcon):
         QSystemTrayIcon.__init__(self, parent)
         self.app_context = app_context
         self.enabled_icon = QIcon(app_context.get_resource("icon_enabled.png"))
-        self.disabled_icon = QIcon(app_context.get_resource("icon_disabled.png"))
+        self.disabled_icon = QIcon(
+            app_context.get_resource("icon_disabled.png"))
         self.cadmus_lib_path = ""
 
         self.disable_suppression_menu = QAction("Disable Noise Suppression")
         self.enable_suppression_menu = QMenu("Enable Noise Suppression")
         self.level_section = None
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setTickInterval(5)
-        self.slider.setMinimum(0)
-        self.slider.setMaximum(100)
-        self.slider.setValue(CadmusApplication.control_level)
-        self.slider.valueChanged.connect(self.slider_valuechange)
+
         self.exit_menu = QAction("Exit")
 
         self.gui_setup()
+
+        for src in pulse.source_list():
+            if ('Yeti_Stereo_Microphone' in src.name):
+                self.enable_noise_suppression(src.name)
+
         self.drop_cadmus_binary()
 
     def get_section_message(self):
-        return "Suppression Level: %d" % self.slider.value()
+        return "Suppression Level: %d" % self.control_level
 
-    def slider_valuechange(self):
-        CadmusApplication.control_level = self.slider.value()
+    def checkbox_value_change(self):
+        print(f"Suppression level set to: {self.sender().suppression_level}")
+        CadmusApplication.control_level = self.sender().suppression_level
         self.level_section.setText(self.get_section_message())
 
     def drop_cadmus_binary(self):
-        cadmus_cache_path = os.path.join(os.environ["HOME"], ".cache", "cadmus")
+        cadmus_cache_path = os.path.join(
+            os.environ["HOME"], ".cache", "cadmus")
         if not os.path.exists(cadmus_cache_path):
             os.makedirs(cadmus_cache_path)
 
-        self.cadmus_lib_path = os.path.join(cadmus_cache_path, "librnnoise_ladspa.so")
+        self.cadmus_lib_path = os.path.join(
+            cadmus_cache_path, "librnnoise_ladspa.so")
 
         copyfile(
-            self.app_context.get_resource("librnnoise_ladspa.so"), self.cadmus_lib_path
+            self.app_context.get_resource(
+                "librnnoise_ladspa.so"), self.cadmus_lib_path
         )
 
     def gui_setup(self):
         main_menu = QMenu()
 
         self.disable_suppression_menu.setEnabled(False)
-        self.disable_suppression_menu.triggered.connect(self.disable_noise_suppression)
+        self.disable_suppression_menu.triggered.connect(
+            self.disable_noise_suppression)
 
         for src in pulse.source_list():
             mic_menu_item = AudioMenuItem(
-                src.description, self.enable_suppression_menu, src.name,
-            )
+                src.description, self.enable_suppression_menu, src.name)
             self.enable_suppression_menu.addAction(mic_menu_item)
             mic_menu_item.triggered.connect(self.enable_noise_suppression)
 
@@ -131,11 +148,24 @@ class CadmusApplication(QSystemTrayIcon):
         main_menu.addAction(self.disable_suppression_menu)
         main_menu.addAction(self.exit_menu)
 
-        # Add slider widget
-        self.level_section = self.enable_suppression_menu.addSection(self.get_section_message())
-        wa = QWidgetAction(self.enable_suppression_menu)
-        wa.setDefaultWidget(self.slider)
-        self.enable_suppression_menu.addAction(wa)
+        # Menu for Suppression Level
+        self.suppression_level_menu = QMenu("Set Noise Suppression Level")
+
+        # Create Submenu
+        self.level_section = self.enable_suppression_menu.addSection(
+            self.get_section_message())
+
+        # Add checkboxes for suppression levels
+        for i in range(0, 101, 10):
+            menu_item = SuppressionLevelMenuItem(
+                i, self.suppression_level_menu)
+            menu_item.setCheckable(True)
+            if (i == self.control_level):
+                menu_item.setChecked(True)
+            self.suppression_level_menu.addAction(menu_item)
+            menu_item.triggered.connect(self.checkbox_value_change)
+
+        self.enable_suppression_menu.addMenu(self.suppression_level_menu)
 
         self.setIcon(self.disabled_icon)
         self.setContextMenu(main_menu)
@@ -146,8 +176,11 @@ class CadmusApplication(QSystemTrayIcon):
         self.enable_suppression_menu.setEnabled(True)
         self.setIcon(self.disabled_icon)
 
-    def enable_noise_suppression(self):
-        CadmusPulseInterface.load_modules(self.sender().mic_name, self.cadmus_lib_path)
+    def enable_noise_suppression(self, micname=""):
+        if (micname == ""):
+            micname = self.sender().mic_name
+
+        CadmusPulseInterface.load_modules(micname, self.cadmus_lib_path)
         self.setIcon(self.enabled_icon)
         self.enable_suppression_menu.setEnabled(False)
         self.disable_suppression_menu.setEnabled(True)
